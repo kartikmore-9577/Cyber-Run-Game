@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { AudioManager } from '../systems/AudioManager';
 
 export class MenuScene extends Phaser.Scene {
   public constructor() {
@@ -29,6 +30,7 @@ export class MenuScene extends Phaser.Scene {
     }).setOrigin(0.5).setInteractive({ useHandCursor: true });
 
     startButton.on('pointerdown', () => {
+      AudioManager.resume();
       this.scene.start('GameScene');
     });
   }

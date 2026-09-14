@@ -1,11 +1,14 @@
 import Phaser from 'phaser';
+import { Boss } from '../entities/Boss';
 import { Player } from '../entities/Player';
 import { ComicMessageSystem } from '../systems/ComicMessageSystem';
+import { AudioManager } from '../systems/AudioManager';
 import { HUD } from '../ui/HUD';
 import { MobileControls } from '../ui/MobileControls';
 
 export class GameScene extends Phaser.Scene {
   private player!: Player;
+  private boss!: Boss;
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private keys!: Record<string, Phaser.Input.Keyboard.Key>;
   private hazards!: Phaser.Physics.Arcade.Group;
@@ -13,20 +16,11 @@ export class GameScene extends Phaser.Scene {
   private checkpoint!: Phaser.GameObjects.Rectangle;
   private checkpoints!: Phaser.Physics.Arcade.StaticGroup;
   private gunPickup!: Phaser.GameObjects.Rectangle;
-  private boss!: Phaser.GameObjects.Rectangle;
-  private bossVisual!: Phaser.GameObjects.Container;
-  private bossHeartsText!: Phaser.GameObjects.Text;
-  private bossProjectiles!: Phaser.Physics.Arcade.Group;
   private bullets!: Phaser.Physics.Arcade.Group;
-  private readonly maxBossHealth = 5;
-  private readonly bossProjectileSpeed = 260;
   private gunCollected = false;
-  private currentBossHealth = this.maxBossHealth;
-  private lastBossAttack = 0;
-  private bossDefeated = false;
   private gunWarningShown = false;
-  private bossLowHealthShown = false;
-  private finalAttackShown = false;
+  private bossDefeated = false;
+  private gameCompleted = false;
   private paused = false;
   private pauseOverlay!: Phaser.GameObjects.Container;
   private comic!: ComicMessageSystem;
@@ -44,23 +38,28 @@ export class GameScene extends Phaser.Scene {
   private readonly checkpointPositions = [4700, 7200, 9800];
   private readonly sectionWarnings = new Set<number>();
   private nextBulletId = 1;
+  private gameStartTime = 0;
+  private readonly audio = new AudioManager();
 
   public constructor() {
     super('GameScene');
   }
 
-  private checkBulletBossBounds(): void {
-    const bossBody = this.boss.body as Phaser.Physics.Arcade.Body;
-    if (!this.boss.active || !bossBody.enable) return;
+  private checkBossBulletHits(): void {
+    if (!this.boss.hitbox.active) return;
+    const bossHitbox = new Phaser.Geom.Rectangle(
+      this.boss.hitbox.x - 75,
+      this.boss.hitbox.y - 95,
+      150,
+      190,
+    );
     this.bullets.children.each((child) => {
       const bullet = child as Phaser.Physics.Arcade.Image;
-      const bulletBody = bullet.body as Phaser.Physics.Arcade.Body | null;
-      if (bullet.active && bulletBody?.enable
-        && Phaser.Geom.Intersects.RectangleToRectangle(
-          new Phaser.Geom.Rectangle(bulletBody.x, bulletBody.y, bulletBody.width, bulletBody.height),
-          new Phaser.Geom.Rectangle(bossBody.x, bossBody.y, bossBody.width, bossBody.height),
-        )) {
-        this.hitBoss(bullet, this.boss);
+      if (bullet.active && Phaser.Geom.Intersects.RectangleToRectangle(
+        bullet.getBounds(),
+        bossHitbox,
+      )) {
+        this.hitBoss(bullet);
       }
       return true;
     });
@@ -75,6 +74,15 @@ export class GameScene extends Phaser.Scene {
     this.createHazards();
 
     this.player = new Player(this, this.checkpointSpawnX, this.checkpointSpawnY);
+    this.boss = new Boss(
+      this,
+      11950,
+      505,
+      () => this.player,
+      () => this.handleBossDefeated(),
+      () => this.audio.play('bossShoot'),
+    );
+    this.bullets = this.physics.add.group({ allowGravity: false });
     this.physics.add.collider(this.player, platforms);
     this.physics.add.overlap(this.player, this.hazards, (_player, hazard) => this.damage(hazard as Phaser.GameObjects.GameObject));
     this.physics.add.overlap(this.player, this.checkpoints, (_player, checkpoint) => {
@@ -82,16 +90,14 @@ export class GameScene extends Phaser.Scene {
     });
     this.physics.add.overlap(this.player, this.ddosWave, () => this.damage(this.ddosWave));
     this.physics.add.overlap(this.player, this.gunPickup, () => this.collectGun());
-    this.physics.add.overlap(this.player, this.bossProjectiles, (_player, projectile) => {
+    this.physics.add.overlap(this.player, this.boss.projectiles, (_player, projectile) => {
       const shard = projectile as Phaser.Physics.Arcade.Image;
       if (!shard.active || !shard.body) return;
       shard.setActive(false).setVisible(false);
       (shard.body as Phaser.Physics.Arcade.Body).enable = false;
       this.damage(shard);
     });
-    this.physics.add.overlap(this.bullets, this.boss, (_bullet, boss) => {
-      this.hitBoss(_bullet as Phaser.Physics.Arcade.Image, this.boss);
-    });
+    this.boss.startAttacking();
 
     this.cursors = this.input.keyboard!.createCursorKeys();
     this.keys = {
@@ -109,8 +115,13 @@ export class GameScene extends Phaser.Scene {
     this.comic = new ComicMessageSystem(this);
     this.hud = new HUD(this);
     this.mobile = new MobileControls(this);
+    this.gameStartTime = this.time.now;
     this.createPauseOverlay();
     this.input.keyboard!.on('keydown-ESC', this.togglePause, this);
+    this.input.keyboard!.on('keydown-R', () => {
+      if (this.gameCompleted) this.scene.restart();
+    });
+    this.createSoundToggle();
     this.hud.update(this.health, this.score);
     this.comic.show('SURVIVE THE THREATS. KEEP MOVING.', 1900);
 
@@ -121,13 +132,21 @@ export class GameScene extends Phaser.Scene {
 
   public update(time: number): void {
     if (this.paused) return;
+    if (this.gameCompleted) return;
     const left = this.keys.left.isDown || this.cursors.left.isDown || this.mobile.state.left;
     const right = this.keys.right.isDown || this.cursors.right.isDown || this.mobile.state.right;
     const jumpPressed = Phaser.Input.Keyboard.JustDown(this.keys.up)
       || Phaser.Input.Keyboard.JustDown(this.keys.space)
       || Phaser.Input.Keyboard.JustDown(this.cursors.up)
       || this.mobile.state.jump;
-    this.player.update(left, right, jumpPressed, this.keys.down.isDown || this.cursors.down.isDown || this.mobile.state.crouch);
+    if (this.player.update(
+      left,
+      right,
+      jumpPressed,
+      this.keys.down.isDown || this.cursors.down.isDown || this.mobile.state.crouch,
+    )) {
+      this.audio.play('jump');
+    }
     if (this.player.y > 760) this.respawn();
     this.updateCheckpointProgress();
 
@@ -153,23 +172,23 @@ export class GameScene extends Phaser.Scene {
     }
     if (this.gunCollected && !this.bossDefeated) {
       if (Phaser.Input.Keyboard.JustDown(this.keys.shoot) || this.mobile.state.shoot) this.shoot();
-      this.updateBoss(time);
     }
+    this.boss.update(time);
     this.player.syncGun();
-    this.checkBulletBossBounds();
+    this.checkBossBulletHits();
     if (time < this.invulnerableUntil) this.player.setAlpha(0.55 + Math.sin(time / 60) * 0.35);
     else this.player.setAlpha(1);
   }
 
   private createBackground(worldWidth: number): void {
-    this.add.rectangle(worldWidth / 2, 360, worldWidth, 720, 0x242424);
-    for (let x = 0; x < worldWidth; x += 360) {
-      const height = 120 + ((x / 360) % 4) * 45;
-      this.add.rectangle(x + 150, 600 - height / 2, 250, height, 0x303030);
-      this.add.rectangle(x + 120, 560 - height / 2, 10, 10, 0x8c8c8c);
-      this.add.rectangle(x + 175, 560 - height / 2, 10, 10, 0x8c8c8c);
-      this.add.text(x + 20, 155, 'SERVER // NODE', { color: '#555555', fontSize: '14px', fontFamily: 'Arial' });
-    }
+    const background = this.add.tileSprite(worldWidth / 2, 360, worldWidth, 720, 'cyberBackground')
+      .setDepth(-20)
+      .setScrollFactor(0.15, 0);
+    const scale = Math.max(1280 / 1664, 720 / 936);
+    background.setTileScale(scale, scale);
+    this.add.rectangle(worldWidth / 2, 360, worldWidth, 720, 0x06111d, 0.52)
+      .setDepth(-19)
+      .setScrollFactor(0.15, 0);
     this.add.text(460, 200, 'CYBER DISTRICT', { color: '#777777', fontSize: '30px', fontStyle: 'bold' });
     this.add.text(5200, 200, 'SECURITY SECTOR', { color: '#777777', fontSize: '30px', fontStyle: 'bold' });
     this.add.text(7600, 200, 'BREACH ZONE', { color: '#777777', fontSize: '30px', fontStyle: 'bold' });
@@ -239,30 +258,11 @@ export class GameScene extends Phaser.Scene {
       this.hazards.add(fragment);
       this.tweens.add({ targets: fragment, y: 560, duration: 1100 + (x % 3) * 200, yoyo: true, repeat: -1 });
     }
-    this.bullets = this.physics.add.group({ allowGravity: false });
-    this.bossProjectiles = this.physics.add.group({ allowGravity: false, immovable: true });
     this.gunPickup = this.add.rectangle(10600, 545, 92, 32, 0xf4f4f4).setStrokeStyle(4, 0xd83939);
     this.physics.add.existing(this.gunPickup);
     (this.gunPickup.body as Phaser.Physics.Arcade.Body).setAllowGravity(false).setImmovable(true);
     this.add.text(10510, 475, 'CYBER GUN', { color: '#f4f4f4', fontSize: '20px', fontStyle: 'bold' });
     this.add.text(10525, 515, 'PRESS F / CLICK', { color: '#d83939', fontSize: '14px', fontStyle: 'bold' });
-    this.boss = this.add.rectangle(11950, 505, 150, 190, 0x090909).setStrokeStyle(5, 0xd83939);
-    this.physics.add.existing(this.boss);
-    (this.boss.body as Phaser.Physics.Arcade.Body)
-      .setAllowGravity(false)
-      .setImmovable(true)
-      .setSize(150, 190)
-      .setOffset(0, 0);
-    this.bossVisual = this.createBossVisual();
-    this.bossVisual.setPosition(this.boss.x, this.boss.y).setDepth(6);
-    this.add.text(11850, 375, 'THE CYBER THREAT', { color: '#f4f4f4', fontSize: '22px', fontStyle: 'bold' });
-    this.bossHeartsText = this.add.text(11950, 410, '', {
-      color: '#f4f4f4',
-      fontFamily: 'Arial',
-      fontSize: '24px',
-      fontStyle: 'bold',
-    }).setOrigin(0.5).setVisible(false);
-    this.updateBossHearts();
   }
 
   private addHazard(x: number, y: number, label: string, hazardType: string): void {
@@ -296,6 +296,7 @@ export class GameScene extends Phaser.Scene {
   private damage(source: Phaser.GameObjects.GameObject): void {
     if (this.time.now < this.invulnerableUntil) return;
     this.health -= 1;
+    this.audio.play(this.health <= 0 ? 'gameOver' : 'playerHit');
     this.score = Math.max(0, this.score - 25);
     this.invulnerableUntil = this.time.now + 1200;
     this.hud.update(this.health, this.score);
@@ -328,7 +329,7 @@ export class GameScene extends Phaser.Scene {
     this.player.setPosition(this.checkpointSpawnX, this.checkpointSpawnY);
     this.player.setVelocity(0, 0);
     this.invulnerableUntil = this.time.now + 1500;
-    this.bossProjectiles?.clear(true, true);
+    this.boss.projectiles.clear(true, true);
     this.hud.update(this.health, this.score);
   }
 
@@ -358,21 +359,19 @@ export class GameScene extends Phaser.Scene {
     this.gunPickup.setVisible(false).setActive(false);
     (this.gunPickup.body as Phaser.Physics.Arcade.Body).enable = false;
     this.player.equipGun();
-    this.bossHeartsText.setVisible(true);
     this.comic.show('ENOUGH RUNNING. TIME TO FIGHT BACK.', 1800);
   }
 
   private shoot(): void {
     if (!this.gunCollected || this.bossDefeated) return;
-    const direction = Math.sign(this.boss.x - this.player.x) || 1;
+    const direction = Math.sign(this.boss.hitbox.x - this.player.x) || 1;
     this.player.setFlipX(direction < 0);
     this.player.syncGun();
-    const bullet = this.bullets.get(
+    const bullet = this.bullets.create(
       this.player.x + direction * 44,
       this.player.y - 38,
       'player-bullet',
     ) as Phaser.Physics.Arcade.Image;
-    if (!bullet) return;
     bullet.setData('bulletId', this.nextBulletId);
     this.nextBulletId += 1;
     bullet.setActive(true).setVisible(true);
@@ -382,136 +381,144 @@ export class GameScene extends Phaser.Scene {
     body.setVelocity(direction * 760, 0);
     body.setSize(18, 18);
     body.setOffset(0, 0);
+    this.audio.play('playerShoot');
     console.log('[SHOT]', 'bulletId=', bullet.getData('bulletId'), 'active=', bullet.active, 'x=', bullet.x, 'y=', bullet.y);
   }
 
-  private updateBoss(time: number): void {
-    if (this.currentBossHealth <= 0) return;
-    this.boss.x = 11950 + Math.sin(time / 900) * 90;
-    this.boss.y = 505 + Math.sin(time / 420) * 24;
-    (this.boss.body as Phaser.Physics.Arcade.Body).reset(this.boss.x, this.boss.y);
-    (this.boss.body as Phaser.Physics.Arcade.Body).setSize(150, 190).setOffset(0, 0);
-    this.bossVisual.setPosition(this.boss.x, this.boss.y);
-    this.bossHeartsText.setPosition(this.boss.x, this.boss.y - 95);
-    if (time > this.lastBossAttack + 1050) {
-      this.lastBossAttack = time;
-      const angle = Phaser.Math.Angle.Between(this.boss.x, this.boss.y - 20, this.player.x, this.player.y - 30);
-      const projectile = this.bossProjectiles.create(
-        this.boss.x + Math.cos(angle) * 78,
-        this.boss.y - 20 + Math.sin(angle) * 78,
-        'boss-shard',
-      ) as Phaser.Physics.Arcade.Image;
-      projectile.setActive(true).setVisible(true).setAngle(Phaser.Math.RadToDeg(angle));
-      const body = projectile.body as Phaser.Physics.Arcade.Body;
-      body.setAllowGravity(false).setEnable(true);
-      body.setVelocity(
-        Math.cos(angle) * this.bossProjectileSpeed,
-        Math.sin(angle) * this.bossProjectileSpeed,
-      );
-      projectile.setData('hazardType', 'boss');
-      if (this.currentBossHealth <= 2 && !this.finalAttackShown) {
-        this.finalAttackShown = true;
-        this.comic.show('FINAL ATTACK INCOMING!', 1500);
-      } else if (this.currentBossHealth > 2) {
-        this.comic.show('INCOMING DATA SHARD!', 700);
-      }
-    }
-  }
-
-  private hitBoss(bullet: Phaser.GameObjects.GameObject, boss: Phaser.GameObjects.GameObject): void {
+  private hitBoss(bullet: Phaser.GameObjects.GameObject): void {
     const playerBullet = bullet as Phaser.Physics.Arcade.Image;
-    const bossBody = boss.body as Phaser.Physics.Arcade.Body;
-    if (this.bossDefeated || !boss.active || !playerBullet.active || !playerBullet.body || !bossBody.enable) return;
-    console.log('[BOSS COLLISION]', 'bulletId=', playerBullet.getData('bulletId'));
-    console.log('[DAMAGE BEFORE]', this.currentBossHealth);
+    if (this.bossDefeated || !this.boss.hitbox.active || !playerBullet.active || !playerBullet.body
+      || !(this.boss.hitbox.body as Phaser.Physics.Arcade.Body).enable) return;
+    console.log('[BOSS HIT]', 'bullet:', playerBullet.getData('bulletId'));
     playerBullet.setActive(false).setVisible(false);
     (playerBullet.body as Phaser.Physics.Arcade.Body).enable = false;
-    this.takeDamageFromPlayerBullet();
-    console.log('[DAMAGE AFTER]', this.currentBossHealth);
+    this.boss.takeDamageFromPlayerBullet();
+    this.audio.play('bossHit');
     console.log('[BULLET REMOVED]', 'bulletId=', playerBullet.getData('bulletId'));
-    this.cameras.main.flash(80, 255, 255, 255);
-    if (this.currentBossHealth <= 0) {
-      this.bossDefeated = true;
-      const bossRectangle = boss as Phaser.GameObjects.Rectangle;
-      bossRectangle.setActive(false).setVisible(false);
-      this.bossVisual.setVisible(false);
-      bossBody.enable = false;
-      this.bossHeartsText.setVisible(false);
-      this.score += 1000;
-      this.hud.update(this.health, this.score);
-      this.comic.show('CYBER THREAT DEFEATED — DIGITAL FRAGMENTS SECURED!', 3000);
-        for (let index = 0; index < 14; index += 1) {
-          const fragment = this.add.rectangle(this.boss.x, this.boss.y, 12, 12, index % 2 ? 0xd83939 : 0xf4f4f4);
-          this.tweens.add({ targets: fragment, x: fragment.x + Phaser.Math.Between(-220, 220), y: fragment.y + Phaser.Math.Between(-180, 180), alpha: 0, duration: 900, onComplete: () => fragment.destroy() });
-        }
+  }
 
+  private handleBossDefeated(): void {
+    if (this.bossDefeated) return;
+    this.bossDefeated = true;
+    this.audio.play('bossDefeat');
+    this.score += 1000;
+    this.hud.update(this.health, this.score);
+    this.player.setVelocity(0, 0);
+    this.comic.show('CYBER THREAT DEFEATED!', 1500);
+    for (let index = 0; index < 14; index += 1) {
+      const fragment = this.add.rectangle(this.boss.hitbox.x, this.boss.hitbox.y, 12, 12, index % 2 ? 0xd83939 : 0xf4f4f4);
+      this.tweens.add({
+        targets: fragment,
+        x: fragment.x + Phaser.Math.Between(-220, 220),
+        y: fragment.y + Phaser.Math.Between(-180, 180),
+        alpha: 0,
+        duration: 900,
+        onComplete: () => fragment.destroy(),
+      });
     }
+    this.time.delayedCall(1700, () => this.comic.show('YOU MADE IT.', 1200));
+    this.time.delayedCall(3100, () => this.comic.show('YOU WON!!', 1400));
+    this.time.delayedCall(4500, () => this.showVictoryWindow());
   }
 
-  private takeDamageFromPlayerBullet(): void {
-    if (this.currentBossHealth <= 0) return;
-    this.currentBossHealth -= 1;
-    this.updateBossHearts();
-    console.log('PLAYER BULLET HIT BOSS HEARTS LEFT:', this.currentBossHealth);
+  private showVictoryWindow(): void {
+    if (this.gameCompleted) return;
+    this.gameCompleted = true;
+    const width = this.scale.width;
+    const height = this.scale.height;
+    const panelWidth = Math.min(650, width - 32);
+    const panelHeight = Math.min(570, height - 32);
+    const centerX = width / 2;
+    const centerY = height / 2;
+    const panel = this.add.rectangle(centerX, centerY, panelWidth, panelHeight, 0x090909, 0.97)
+      .setStrokeStyle(4, 0xd83939);
+    const title = this.add.text(centerX, centerY - panelHeight / 2 + 38, 'YOU WON!!', {
+      color: '#d83939',
+      fontFamily: 'Arial',
+      fontSize: width < 520 ? '30px' : '40px',
+      fontStyle: 'bold',
+    }).setOrigin(0.5);
+    const defeated = this.add.text(centerX, centerY - panelHeight / 2 + 82, 'CYBER THREAT DEFEATED', {
+      color: '#f4f4f4',
+      fontFamily: 'Arial',
+      fontSize: width < 520 ? '16px' : '20px',
+      fontStyle: 'bold',
+    }).setOrigin(0.5);
+    const elapsedSeconds = Math.max(0, Math.floor((this.time.now - this.gameStartTime) / 1000));
+    const minutes = Math.floor(elapsedSeconds / 60).toString().padStart(2, '0');
+    const seconds = (elapsedSeconds % 60).toString().padStart(2, '0');
+    const summary = this.add.text(centerX, centerY - panelHeight / 2 + 125,
+      `FINAL SCORE  ${this.score}\nTIME  ${minutes}:${seconds}`, {
+        color: '#f4f4f4',
+        fontFamily: 'Arial',
+        fontSize: width < 520 ? '16px' : '18px',
+        fontStyle: 'bold',
+        align: 'center',
+        lineSpacing: 8,
+      }).setOrigin(0.5);
+    const threats = this.add.text(centerX, centerY - 32,
+      'CYBERSECURITY OBSTACLES YOU SURVIVED\n\n'
+      + '✓ Phishing     ✓ Malware\n'
+      + '✓ Weak Password     ✓ DDoS Attack\n'
+      + '✓ Unauthorized Access\n'
+      + '✓ Data Breach     ✓ Ransomware\n'
+      + '✓ Final Cyber Threat', {
+        color: '#f4f4f4',
+        fontFamily: 'Arial',
+        fontSize: width < 520 ? '13px' : '15px',
+        align: 'center',
+        lineSpacing: 5,
+        wordWrap: { width: panelWidth - 38 },
+      }).setOrigin(0.5);
+    const compactLayout = width < 520;
+    const education = this.add.text(centerX, centerY + panelHeight / 2 - (compactLayout ? 122 : 82),
+      'Stay alert. Think before you click, download, share, or give access.', {
+        color: '#bdbdbd',
+        fontFamily: 'Arial',
+        fontSize: width < 520 ? '11px' : '13px',
+        align: 'center',
+        wordWrap: { width: panelWidth - 42 },
+      }).setOrigin(0.5);
+    const playAgain = this.createVictoryButton(
+      compactLayout ? centerX : centerX - 105,
+      centerY + panelHeight / 2 - (compactLayout ? 78 : 38),
+      'PLAY AGAIN',
+      () => {
+      this.scene.restart();
+      },
+    );
+    const leaderboard = this.createVictoryButton(
+      compactLayout ? centerX : centerX + 105,
+      centerY + panelHeight / 2 - (compactLayout ? 32 : 38),
+      'LEADERBOARD',
+      () => {
+      this.comic.show('LEADERBOARD COMING SOON', 1800);
+      },
+    );
+    this.add.container(0, 0, [
+      panel, title, defeated, summary, threats, education, playAgain, leaderboard,
+    ]).setScrollFactor(0).setDepth(50);
   }
 
-  private updateBossHearts(): void {
-    if (!this.bossHeartsText) return;
-    const fullHearts = '♥ '.repeat(this.currentBossHealth).trim();
-    const emptyHearts = '♡ '.repeat(this.maxBossHealth - this.currentBossHealth).trim();
-    this.bossHeartsText.setText([fullHearts, emptyHearts].filter(Boolean).join(' '));
-  }
-
-  private createBossVisual(): Phaser.GameObjects.Container {
-    const visual = this.add.container(0, 0);
-              const hood = this.add.graphics();
-              hood.fillStyle(0x111111, 1);
-              hood.lineStyle(5, 0xf4f4f4, 1);
-              hood.fillPoints([
-                new Phaser.Geom.Point(0, -92),
-                new Phaser.Geom.Point(-58, -42),
-                new Phaser.Geom.Point(-48, 72),
-                new Phaser.Geom.Point(0, 100),
-                new Phaser.Geom.Point(48, 72),
-                new Phaser.Geom.Point(58, -42),
-              ], true);
-              hood.strokePoints([
-                new Phaser.Geom.Point(0, -92),
-                new Phaser.Geom.Point(-58, -42),
-                new Phaser.Geom.Point(-48, 72),
-                new Phaser.Geom.Point(0, 100),
-                new Phaser.Geom.Point(48, 72),
-                new Phaser.Geom.Point(58, -42),
-                new Phaser.Geom.Point(0, -92),
-              ], true);
-
-              const face = this.add.graphics();
-              face.fillStyle(0x020202, 1);
-              face.fillTriangle(-42, -28, 42, -28, 0, 52);
-              face.fillStyle(0xd83939, 1);
-              face.fillTriangle(-28, -12, -5, -6, -30, 2);
-              face.fillTriangle(28, -12, 5, -6, 30, 2);
-              face.lineStyle(4, 0xd83939, 0.8);
-              face.strokeCircle(0, 38, 24);
-
-              const core = this.add.graphics();
-              core.fillStyle(0x8f2424, 0.8);
-              core.lineStyle(3, 0xf4f4f4, 0.8);
-              core.fillCircle(0, 115, 34);
-              core.strokeCircle(0, 115, 34);
-              core.lineBetween(-25, 115, 25, 115);
-              core.lineBetween(0, 90, 0, 140);
-
-              visual.add([hood, face, core]);
-              this.tweens.add({
-                targets: core,
-                alpha: 0.35,
-                duration: 420,
-                yoyo: true,
-                repeat: -1,
-                ease: 'Sine.inOut',
-              });
-    return visual;
+  private createVictoryButton(
+    x: number,
+    y: number,
+    label: string,
+    callback: () => void,
+  ): Phaser.GameObjects.Container {
+    const button = this.add.rectangle(x, y, 190, 38, 0x242424)
+      .setStrokeStyle(2, 0xd83939)
+      .setInteractive({ useHandCursor: true });
+    const text = this.add.text(x, y, label, {
+      color: '#f4f4f4',
+      fontFamily: 'Arial',
+      fontSize: '13px',
+      fontStyle: 'bold',
+    }).setOrigin(0.5);
+    button.on('pointerover', () => button.setFillStyle(0x8f2424));
+    button.on('pointerout', () => button.setFillStyle(0x242424));
+    button.on('pointerdown', callback);
+    return this.add.container(0, 0, [button, text]);
   }
 
   private createProjectileTextures(): void {
@@ -524,15 +531,6 @@ export class GameScene extends Phaser.Scene {
       bullet.generateTexture('player-bullet', 18, 18);
       bullet.destroy();
     }
-    if (!this.textures.exists('boss-shard')) {
-      const shard = this.add.graphics();
-      shard.fillStyle(0x8f2424, 1);
-      shard.lineStyle(2, 0xd83939, 1);
-      shard.fillTriangle(0, 10, 30, 0, 30, 20);
-      shard.strokeTriangle(0, 10, 30, 0, 30, 20);
-      shard.generateTexture('boss-shard', 30, 20);
-      shard.destroy();
-    }
   }
 
   private cleanupProjectiles(): void {
@@ -544,7 +542,7 @@ export class GameScene extends Phaser.Scene {
           }
           return true;
     });
-    this.bossProjectiles?.children.each((child) => {
+    this.boss.projectiles.children.each((child) => {
           const projectile = child as Phaser.GameObjects.GameObject & { x: number; y: number };
           if (projectile.x < 0 || projectile.x > this.physics.world.bounds.width
             || projectile.y < 0 || projectile.y > this.physics.world.bounds.height) projectile.destroy();
@@ -572,6 +570,25 @@ export class GameScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(30)
       .setVisible(false);
+  }
+
+  private createSoundToggle(): void {
+    const button = this.add.text(this.scale.width - 24, 24, '', {
+      color: '#f4f4f4',
+      backgroundColor: '#111111',
+      fontFamily: 'Arial',
+      fontSize: '14px',
+      fontStyle: 'bold',
+      padding: { left: 10, right: 10, top: 7, bottom: 7 },
+    }).setOrigin(1, 0).setScrollFactor(0).setDepth(31).setInteractive({ useHandCursor: true });
+    const updateLabel = (): void => {
+      button.setText(AudioManager.isMuted() ? 'SOUND OFF' : 'SOUND ON');
+    };
+    updateLabel();
+    button.on('pointerdown', () => {
+      AudioManager.toggleMute();
+      updateLabel();
+    });
   }
 
   private togglePause(): void {

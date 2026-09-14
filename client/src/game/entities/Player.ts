@@ -34,7 +34,7 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     rightDown: boolean,
     jumpJustDown: boolean,
     crouchDown: boolean,
-  ): void {
+  ): boolean {
     const body = this.body as Phaser.Physics.Arcade.Body;
     const isCrouching = crouchDown && body.blocked.down;
 
@@ -64,7 +64,9 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
 
     if (jumpJustDown && body.blocked.down && !isCrouching) {
       this.setVelocityY(-this.jumpVelocity);
+      return true;
     }
+    return false;
   }
 
   public equipGun(): void {
