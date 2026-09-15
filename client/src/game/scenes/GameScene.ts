@@ -151,7 +151,7 @@ export class GameScene extends Phaser.Scene {
     this.updateCheckpointProgress();
 
     if (this.ddosWave.active) {
-      this.ddosWave.x -= 2.4;
+      this.ddosWave.x -= 1.5;
       if (this.ddosWave.x < this.player.x - 500) this.ddosWave.x = this.player.x + 900;
       this.ddosPackets.forEach((packet, index) => {
         packet.x = this.ddosWave.x - 48 + index * 24;
@@ -226,7 +226,7 @@ export class GameScene extends Phaser.Scene {
     this.physics.add.existing(malware);
     malware.setData('hazardType', 'malware');
     this.hazards.add(malware);
-    this.tweens.add({ targets: malware, x: 2600, duration: 1800, yoyo: true, repeat: -1, ease: 'Sine.inOut' });
+    this.tweens.add({ targets: malware, x: 2550, duration: 2200, yoyo: true, repeat: -1, ease: 'Sine.inOut' });
     this.add.text(2400, 500, 'MALWARE // PATROL', { color: '#f4f4f4', fontSize: '16px', fontStyle: 'bold' });
     this.add.text(2440, 545, '✕', { color: '#111111', fontSize: '28px', fontStyle: 'bold' });
     this.addThreatFace(2450, 560, 1);
@@ -319,6 +319,7 @@ export class GameScene extends Phaser.Scene {
                 : "WAIT... THAT LINK LOOKS SUSPICIOUS! — PHISHING";
     this.comic.show(message, 1600);
     if (this.health <= 0) this.respawn();
+    else this.player.triggerHitAnimation();
   }
 
   private respawn(): void {
@@ -366,6 +367,7 @@ export class GameScene extends Phaser.Scene {
     if (!this.gunCollected || this.bossDefeated) return;
     const direction = Math.sign(this.boss.hitbox.x - this.player.x) || 1;
     this.player.setFlipX(direction < 0);
+    this.player.triggerShootAnimation();
     this.player.syncGun();
     const bullet = this.bullets.create(
       this.player.x + direction * 44,
