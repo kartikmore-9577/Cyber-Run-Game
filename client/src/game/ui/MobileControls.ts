@@ -13,7 +13,6 @@ type ControlKey = keyof MobileControlState;
 interface TrackedButton {
   button: Phaser.GameObjects.Text;
   key: ControlKey;
-  pointerId: number | null;
 }
 
 interface FullscreenDocument extends Document {
@@ -36,18 +35,20 @@ export class MobileControls {
 
   private readonly scene: Phaser.Scene;
   private readonly buttons: TrackedButton[] = [];
-  private readonly pointerControls = new Map<number, ControlKey>();
+  private readonly touchControls = new Map<number, ControlKey>();
   private readonly orientationOverlay: HTMLDivElement;
   private readonly fullscreenButton: HTMLButtonElement;
   private readonly debugOverlay: HTMLDivElement;
   private readonly resizeHandler: () => void;
   private readonly orientationHandler: () => void;
+  private readonly touchTarget: HTMLCanvasElement;
 
   public constructor(scene: Phaser.Scene) {
     this.scene = scene;
     this.orientationOverlay = this.createOrientationOverlay();
     this.fullscreenButton = this.createFullscreenButton();
     this.debugOverlay = this.createDebugOverlay();
+    this.touchTarget = scene.game.canvas;
     this.resizeHandler = () => this.positionButtons();
     this.orientationHandler = () => this.updateOrientationOverlay();
 
@@ -60,18 +61,16 @@ export class MobileControls {
     this.updateOrientationOverlay();
 
     scene.scale.on(Phaser.Scale.Events.RESIZE, this.resizeHandler);
-    scene.input.on('pointerup', this.releasePointer, this);
-    scene.input.on('pointercancel', this.releasePointer, this);
     window.addEventListener('blur', this.releaseAllButtons);
     document.addEventListener('visibilitychange', this.handleVisibilityChange);
+    this.touchTarget.addEventListener('touchstart', this.handleTouchStart, { passive: false });
+    this.touchTarget.addEventListener('touchmove', this.handleTouchMove, { passive: false });
+    this.touchTarget.addEventListener('touchend', this.handleTouchEnd, { passive: false });
+    this.touchTarget.addEventListener('touchcancel', this.handleTouchEnd, { passive: false });
     window.addEventListener('resize', this.orientationHandler, { passive: true });
     window.addEventListener('orientationchange', this.orientationHandler, { passive: true });
     scene.events.on(Phaser.Scenes.Events.UPDATE, this.updateDebugOverlay, this);
     scene.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.destroy());
-  }
-
-  public containsPointer(pointer: Phaser.Input.Pointer): boolean {
-    return this.buttons.some(({ button }) => button.getBounds().contains(pointer.x, pointer.y));
   }
 
   private addButton(label: string, key: ControlKey): void {
@@ -86,23 +85,10 @@ export class MobileControls {
       .setFixedSize(140, 108)
       .setScrollFactor(0)
       .setDepth(20)
-      .setInteractive(
-        new Phaser.Geom.Rectangle(-70, -54, 140, 108),
-        Phaser.Geom.Rectangle.Contains,
-      );
+      .disableInteractive();
 
-    const tracked: TrackedButton = { button, key, pointerId: null };
+    const tracked: TrackedButton = { button, key };
     this.buttons.push(tracked);
-    button.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
-      if (tracked.pointerId !== null || this.pointerControls.has(pointer.id)) return;
-      tracked.pointerId = pointer.id;
-      this.pointerControls.set(pointer.id, key);
-      this.state[key] = true;
-      button.setStyle({ backgroundColor: '#8f2424cc' });
-    });
-
-    button.on('pointerup', (pointer: Phaser.Input.Pointer) => this.releasePointer(pointer));
-    button.on('pointercancel', (pointer: Phaser.Input.Pointer) => this.releasePointer(pointer));
   }
 
   private positionButtons(): void {
@@ -181,33 +167,58 @@ export class MobileControls {
     }
   }
 
-  private releasePointer(pointer: Phaser.Input.Pointer): void {
-    const key = this.pointerControls.get(pointer.id);
+  private releaseTouch(touchId: number): void {
+    const key = this.touchControls.get(touchId);
     if (!key) return;
-    this.pointerControls.delete(pointer.id);
+    this.touchControls.delete(touchId);
     const tracked = this.buttons.find((entry) => entry.key === key);
-    if (!tracked || tracked.pointerId !== pointer.id) return;
-    tracked.pointerId = null;
+    if (!tracked) return;
     this.state[key] = false;
     tracked.button.setStyle({ backgroundColor: '#222222cc' });
   }
 
   private releaseAllButtons(): void {
-    this.pointerControls.clear();
+    this.touchControls.clear();
     this.buttons.forEach((tracked) => {
-      tracked.pointerId = null;
       this.state[tracked.key] = false;
       tracked.button.setStyle({ backgroundColor: '#222222cc' });
     });
   }
 
+  private getControlAtTouch(touch: Touch): ControlKey | null {
+    const rect = this.touchTarget.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return null;
+    const x = (touch.clientX - rect.left) * this.scene.scale.width / rect.width;
+    const y = (touch.clientY - rect.top) * this.scene.scale.height / rect.height;
+    return this.buttons.find((entry) => entry.button.getBounds().contains(x, y))?.key ?? null;
+  }
+
+  private handleTouchStart = (event: TouchEvent): void => {
+    event.preventDefault();
+    Array.from(event.changedTouches).forEach((touch) => {
+      if (this.touchControls.has(touch.identifier)) return;
+      const key = this.getControlAtTouch(touch);
+      if (!key || Array.from(this.touchControls.values()).includes(key)) return;
+      this.touchControls.set(touch.identifier, key);
+      this.state[key] = true;
+      this.buttons.find((entry) => entry.key === key)?.button.setStyle({ backgroundColor: '#8f2424cc' });
+    });
+  };
+
+  private handleTouchMove = (event: TouchEvent): void => {
+    event.preventDefault();
+  };
+
+  private handleTouchEnd = (event: TouchEvent): void => {
+    event.preventDefault();
+    Array.from(event.changedTouches).forEach((touch) => this.releaseTouch(touch.identifier));
+  };
+
   private updateDebugOverlay(): void {
-    const pointers = this.scene.input.manager.pointers;
-    const activePointers = pointers.filter((pointer) => pointer.isDown && pointer.wasTouch);
-    const mappings = Array.from(this.pointerControls.entries())
-      .map(([pointerId, key]) => `Pointer ${pointerId} → ${key.toUpperCase()}`)
+    const mappings = Array.from(this.touchControls.entries())
+      .map(([touchId, key]) => `Touch ${touchId} → ${key.toUpperCase()}`)
       .join('<br>');
-    this.debugOverlay.innerHTML = `ACTIVE POINTERS: ${activePointers.length}<br>${mappings || 'No button pointers'}`;
+    this.debugOverlay.innerHTML = `ACTIVE TOUCHES: ${this.touchControls.size}<br>${mappings || 'No button touches'}`;
   }
 
   private handleVisibilityChange = (): void => {
@@ -217,9 +228,11 @@ export class MobileControls {
   private destroy(): void {
     this.releaseAllButtons();
     this.scene.scale.off(Phaser.Scale.Events.RESIZE, this.resizeHandler);
-    this.scene.input.off('pointerup', this.releasePointer, this);
-    this.scene.input.off('pointercancel', this.releasePointer, this);
     this.scene.events.off(Phaser.Scenes.Events.UPDATE, this.updateDebugOverlay, this);
+    this.touchTarget.removeEventListener('touchstart', this.handleTouchStart);
+    this.touchTarget.removeEventListener('touchmove', this.handleTouchMove);
+    this.touchTarget.removeEventListener('touchend', this.handleTouchEnd);
+    this.touchTarget.removeEventListener('touchcancel', this.handleTouchEnd);
     window.removeEventListener('blur', this.releaseAllButtons);
     document.removeEventListener('visibilitychange', this.handleVisibilityChange);
     window.removeEventListener('resize', this.orientationHandler);

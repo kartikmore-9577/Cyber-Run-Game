@@ -109,7 +109,7 @@ export class GameScene extends Phaser.Scene {
       shoot: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.F),
     };
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
-      if (!this.paused && !this.mobile?.containsPointer(pointer)) this.shoot();
+      if (!this.paused && !pointer.wasTouch) this.shoot();
     });
 
     this.comic = new ComicMessageSystem(this);
