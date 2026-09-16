@@ -143,7 +143,7 @@ export class GameScene extends Phaser.Scene {
       left,
       right,
       jumpPressed,
-      this.keys.down.isDown || this.cursors.down.isDown || this.mobile.state.crouch,
+      this.keys.down.isDown || this.cursors.down.isDown,
     )) {
       this.audio.play('jump');
     }

@@ -4,7 +4,6 @@ export interface MobileControlState {
   left: boolean;
   right: boolean;
   jump: boolean;
-  crouch: boolean;
   shoot: boolean;
 }
 
@@ -29,7 +28,6 @@ export class MobileControls {
     left: false,
     right: false,
     jump: false,
-    crouch: false,
     shoot: false,
   };
 
@@ -55,7 +53,6 @@ export class MobileControls {
     this.addButton('◀', 'left');
     this.addButton('▶', 'right');
     this.addButton('▲', 'jump');
-    this.addButton('▼', 'crouch');
     this.addButton('●', 'shoot');
     this.positionButtons();
     this.updateOrientationOverlay();
@@ -98,8 +95,7 @@ export class MobileControls {
     const verticalGap = 116;
     this.buttons.find((entry) => entry.key === 'left')?.button.setPosition(sideInset, bottom);
     this.buttons.find((entry) => entry.key === 'right')?.button.setPosition(sideInset + 155, bottom);
-    this.buttons.find((entry) => entry.key === 'jump')?.button.setPosition(width - sideInset - 155, bottom);
-    this.buttons.find((entry) => entry.key === 'crouch')?.button.setPosition(width - sideInset, bottom);
+    this.buttons.find((entry) => entry.key === 'jump')?.button.setPosition(width - sideInset, bottom);
     this.buttons.find((entry) => entry.key === 'shoot')?.button.setPosition(width - sideInset, bottom - verticalGap);
   }
 
