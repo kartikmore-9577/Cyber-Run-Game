@@ -59,7 +59,8 @@ export class MobileControls {
     scene.scale.on(Phaser.Scale.Events.RESIZE, this.resizeHandler);
     scene.input.on('pointerup', this.releasePointer, this);
     scene.input.on('pointercancel', this.releasePointer, this);
-    scene.input.on('gameout', this.releaseAllButtons, this);
+    window.addEventListener('blur', this.releaseAllButtons);
+    document.addEventListener('visibilitychange', this.handleVisibilityChange);
     window.addEventListener('resize', this.orientationHandler, { passive: true });
     window.addEventListener('orientationchange', this.orientationHandler, { passive: true });
     scene.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.destroy());
@@ -189,12 +190,17 @@ export class MobileControls {
     });
   }
 
+  private handleVisibilityChange = (): void => {
+    if (document.hidden) this.releaseAllButtons();
+  };
+
   private destroy(): void {
     this.releaseAllButtons();
     this.scene.scale.off(Phaser.Scale.Events.RESIZE, this.resizeHandler);
     this.scene.input.off('pointerup', this.releasePointer, this);
     this.scene.input.off('pointercancel', this.releasePointer, this);
-    this.scene.input.off('gameout', this.releaseAllButtons, this);
+    window.removeEventListener('blur', this.releaseAllButtons);
+    document.removeEventListener('visibilitychange', this.handleVisibilityChange);
     window.removeEventListener('resize', this.orientationHandler);
     window.removeEventListener('orientationchange', this.orientationHandler);
     this.orientationOverlay.remove();
