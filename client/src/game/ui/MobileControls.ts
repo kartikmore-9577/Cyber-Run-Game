@@ -73,12 +73,12 @@ export class MobileControls {
     const button = this.scene.add.text(0, 0, label, {
       color: '#f4f4f4',
       fontFamily: 'Arial',
-      fontSize: '30px',
+      fontSize: '34px',
       backgroundColor: '#222222cc',
       align: 'center',
     })
       .setOrigin(0.5)
-      .setFixedSize(112, 90)
+      .setFixedSize(140, 108)
       .setScrollFactor(0)
       .setDepth(20)
       .setInteractive({ useHandCursor: false });
@@ -101,18 +101,19 @@ export class MobileControls {
       button.setStyle({ backgroundColor: '#222222cc' });
     };
     button.on('pointerup', release);
-    button.on('pointerout', release);
     button.on('pointercancel', release);
   }
 
   private positionButtons(): void {
     const { width, height } = this.scene.scale;
-    const bottom = height - 70;
-    this.buttons.find((entry) => entry.key === 'left')?.button.setPosition(80, bottom);
-    this.buttons.find((entry) => entry.key === 'right')?.button.setPosition(205, bottom);
-    this.buttons.find((entry) => entry.key === 'jump')?.button.setPosition(width - 205, bottom);
-    this.buttons.find((entry) => entry.key === 'crouch')?.button.setPosition(width - 80, bottom);
-    this.buttons.find((entry) => entry.key === 'shoot')?.button.setPosition(width - 80, bottom - 100);
+    const sideInset = Math.max(90, Math.min(140, width * 0.1));
+    const bottom = height - 80;
+    const verticalGap = 116;
+    this.buttons.find((entry) => entry.key === 'left')?.button.setPosition(sideInset, bottom);
+    this.buttons.find((entry) => entry.key === 'right')?.button.setPosition(sideInset + 155, bottom);
+    this.buttons.find((entry) => entry.key === 'jump')?.button.setPosition(width - sideInset - 155, bottom);
+    this.buttons.find((entry) => entry.key === 'crouch')?.button.setPosition(width - sideInset, bottom);
+    this.buttons.find((entry) => entry.key === 'shoot')?.button.setPosition(width - sideInset, bottom - verticalGap);
   }
 
   private createOrientationOverlay(): HTMLDivElement {
