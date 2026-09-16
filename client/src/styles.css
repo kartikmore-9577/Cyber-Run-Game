@@ -95,3 +95,16 @@ canvas {
   max-width: 420px;
   font-size: clamp(14px, 4vw, 20px);
 }
+
+.touch-debug-overlay {
+  position: fixed;
+  z-index: 150;
+  top: calc(env(safe-area-inset-top) + 8px);
+  left: calc(env(safe-area-inset-left) + 8px);
+  padding: 6px 8px;
+  color: #f4f4f4;
+  background: #111111dd;
+  border: 1px solid #d83939;
+  font: 11px/1.35 monospace;
+  pointer-events: none;
+}

@@ -36,8 +36,10 @@ export class MobileControls {
 
   private readonly scene: Phaser.Scene;
   private readonly buttons: TrackedButton[] = [];
+  private readonly pointerControls = new Map<number, ControlKey>();
   private readonly orientationOverlay: HTMLDivElement;
   private readonly fullscreenButton: HTMLButtonElement;
+  private readonly debugOverlay: HTMLDivElement;
   private readonly resizeHandler: () => void;
   private readonly orientationHandler: () => void;
 
@@ -45,6 +47,7 @@ export class MobileControls {
     this.scene = scene;
     this.orientationOverlay = this.createOrientationOverlay();
     this.fullscreenButton = this.createFullscreenButton();
+    this.debugOverlay = this.createDebugOverlay();
     this.resizeHandler = () => this.positionButtons();
     this.orientationHandler = () => this.updateOrientationOverlay();
 
@@ -63,6 +66,7 @@ export class MobileControls {
     document.addEventListener('visibilitychange', this.handleVisibilityChange);
     window.addEventListener('resize', this.orientationHandler, { passive: true });
     window.addEventListener('orientationchange', this.orientationHandler, { passive: true });
+    scene.events.on(Phaser.Scenes.Events.UPDATE, this.updateDebugOverlay, this);
     scene.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.destroy());
   }
 
@@ -82,27 +86,23 @@ export class MobileControls {
       .setFixedSize(140, 108)
       .setScrollFactor(0)
       .setDepth(20)
-      .setInteractive({ useHandCursor: false });
+      .setInteractive(
+        new Phaser.Geom.Rectangle(-70, -54, 140, 108),
+        Phaser.Geom.Rectangle.Contains,
+      );
 
     const tracked: TrackedButton = { button, key, pointerId: null };
     this.buttons.push(tracked);
-    button.on('pointerdown', (pointer: Phaser.Input.Pointer, _localX: number, _localY: number, event: Event) => {
-      event.stopPropagation();
-      if (tracked.pointerId !== null) return;
+    button.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      if (tracked.pointerId !== null || this.pointerControls.has(pointer.id)) return;
       tracked.pointerId = pointer.id;
+      this.pointerControls.set(pointer.id, key);
       this.state[key] = true;
       button.setStyle({ backgroundColor: '#8f2424cc' });
     });
 
-    const release = (pointer: Phaser.Input.Pointer, _localX: number, _localY: number, event?: Event): void => {
-      event?.stopPropagation();
-      if (tracked.pointerId !== pointer.id) return;
-      tracked.pointerId = null;
-      this.state[key] = false;
-      button.setStyle({ backgroundColor: '#222222cc' });
-    };
-    button.on('pointerup', release);
-    button.on('pointercancel', release);
+    button.on('pointerup', (pointer: Phaser.Input.Pointer) => this.releasePointer(pointer));
+    button.on('pointercancel', (pointer: Phaser.Input.Pointer) => this.releasePointer(pointer));
   }
 
   private positionButtons(): void {
@@ -122,6 +122,14 @@ export class MobileControls {
     overlay.className = 'orientation-overlay';
     overlay.setAttribute('aria-hidden', 'true');
     overlay.innerHTML = '<strong>PLEASE ROTATE YOUR PHONE</strong><span>Rotate your device to landscape mode to play Cyber Run.</span>';
+    document.body.appendChild(overlay);
+    return overlay;
+  }
+
+  private createDebugOverlay(): HTMLDivElement {
+    const overlay = document.createElement('div');
+    overlay.className = 'touch-debug-overlay';
+    overlay.setAttribute('aria-hidden', 'true');
     document.body.appendChild(overlay);
     return overlay;
   }
@@ -174,20 +182,32 @@ export class MobileControls {
   }
 
   private releasePointer(pointer: Phaser.Input.Pointer): void {
+    const key = this.pointerControls.get(pointer.id);
+    if (!key) return;
+    this.pointerControls.delete(pointer.id);
+    const tracked = this.buttons.find((entry) => entry.key === key);
+    if (!tracked || tracked.pointerId !== pointer.id) return;
+    tracked.pointerId = null;
+    this.state[key] = false;
+    tracked.button.setStyle({ backgroundColor: '#222222cc' });
+  }
+
+  private releaseAllButtons(): void {
+    this.pointerControls.clear();
     this.buttons.forEach((tracked) => {
-      if (tracked.pointerId !== pointer.id) return;
       tracked.pointerId = null;
       this.state[tracked.key] = false;
       tracked.button.setStyle({ backgroundColor: '#222222cc' });
     });
   }
 
-  private releaseAllButtons(): void {
-    this.buttons.forEach((tracked) => {
-      tracked.pointerId = null;
-      this.state[tracked.key] = false;
-      tracked.button.setStyle({ backgroundColor: '#222222cc' });
-    });
+  private updateDebugOverlay(): void {
+    const pointers = this.scene.input.manager.pointers;
+    const activePointers = pointers.filter((pointer) => pointer.isDown && pointer.wasTouch);
+    const mappings = Array.from(this.pointerControls.entries())
+      .map(([pointerId, key]) => `Pointer ${pointerId} → ${key.toUpperCase()}`)
+      .join('<br>');
+    this.debugOverlay.innerHTML = `ACTIVE POINTERS: ${activePointers.length}<br>${mappings || 'No button pointers'}`;
   }
 
   private handleVisibilityChange = (): void => {
@@ -199,12 +219,14 @@ export class MobileControls {
     this.scene.scale.off(Phaser.Scale.Events.RESIZE, this.resizeHandler);
     this.scene.input.off('pointerup', this.releasePointer, this);
     this.scene.input.off('pointercancel', this.releasePointer, this);
+    this.scene.events.off(Phaser.Scenes.Events.UPDATE, this.updateDebugOverlay, this);
     window.removeEventListener('blur', this.releaseAllButtons);
     document.removeEventListener('visibilitychange', this.handleVisibilityChange);
     window.removeEventListener('resize', this.orientationHandler);
     window.removeEventListener('orientationchange', this.orientationHandler);
     this.orientationOverlay.remove();
     this.fullscreenButton.remove();
+    this.debugOverlay.remove();
     this.buttons.forEach(({ button }) => button.destroy());
   }
 }
