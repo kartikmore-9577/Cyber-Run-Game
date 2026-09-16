@@ -384,19 +384,16 @@ export class GameScene extends Phaser.Scene {
     body.setSize(18, 18);
     body.setOffset(0, 0);
     this.audio.play('playerShoot');
-    console.log('[SHOT]', 'bulletId=', bullet.getData('bulletId'), 'active=', bullet.active, 'x=', bullet.x, 'y=', bullet.y);
   }
 
   private hitBoss(bullet: Phaser.GameObjects.GameObject): void {
     const playerBullet = bullet as Phaser.Physics.Arcade.Image;
     if (this.bossDefeated || !this.boss.hitbox.active || !playerBullet.active || !playerBullet.body
       || !(this.boss.hitbox.body as Phaser.Physics.Arcade.Body).enable) return;
-    console.log('[BOSS HIT]', 'bullet:', playerBullet.getData('bulletId'));
     playerBullet.setActive(false).setVisible(false);
     (playerBullet.body as Phaser.Physics.Arcade.Body).enable = false;
     this.boss.takeDamageFromPlayerBullet();
     this.audio.play('bossHit');
-    console.log('[BULLET REMOVED]', 'bulletId=', playerBullet.getData('bulletId'));
   }
 
   private handleBossDefeated(): void {

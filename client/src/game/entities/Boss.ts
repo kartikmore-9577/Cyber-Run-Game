@@ -59,7 +59,6 @@ export class Boss {
 
     this.projectiles = scene.physics.add.group({ allowGravity: false });
     Boss.createProjectileTexture(scene);
-    console.log('[BOSS] created');
   }
 
   public startAttacking(): void {
@@ -87,7 +86,6 @@ export class Boss {
     this.currentHealth -= 1;
     this.updateHearts();
     this.scene.cameras.main.flash(80, 255, 255, 255);
-    console.log('[BOSS] HEALTH:', this.currentHealth);
     if (this.currentHealth === 0) this.defeat();
   }
 
